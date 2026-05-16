@@ -17,3 +17,11 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+
+
+# Config files
+backend/config/config.json
+
+
+
