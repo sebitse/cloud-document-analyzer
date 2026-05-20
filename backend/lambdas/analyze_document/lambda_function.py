@@ -6,6 +6,7 @@ import boto3
 
 from shared.config import require_config_value
 from shared.response import success_response, error_response
+from shared.logging_utils import log_event, log_error
 
 
 aws_region = require_config_value("aws", "region")
@@ -31,13 +32,26 @@ def extract_lines_from_textract_response(textract_response):
 
 def lambda_handler(event, context):
     try:
+        log_event(
+            "ANALYZE_DOCUMENT_REQUEST_RECEIVED",
+            lambdaRequestId=getattr(context, "aws_request_id", None)
+        )
+
         body = json.loads(event.get("body", "{}"))
 
         object_key = body.get("key")
         file_name = body.get("fileName", "unknown")
 
         if not object_key:
+            log_event("ANALYZE_DOCUMENT_VALIDATION_FAILED", reason="Missing key")
             return error_response("key is required", status_code=400)
+
+        log_event(
+            "DOCUMENT_ANALYSIS_STARTED",
+            fileName=file_name,
+            s3Key=object_key,
+            bucket=bucket_name
+        )
 
         textract_response = textract.detect_document_text(
             Document={
@@ -50,6 +64,14 @@ def lambda_handler(event, context):
 
         lines = extract_lines_from_textract_response(textract_response)
         extracted_text = "\n".join(lines)
+
+        log_event(
+            "TEXTRACT_ANALYSIS_COMPLETED",
+            fileName=file_name,
+            s3Key=object_key,
+            linesExtracted=len(lines),
+            charactersExtracted=len(extracted_text)
+        )
 
         analysis_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
@@ -65,6 +87,14 @@ def lambda_handler(event, context):
 
         table.put_item(Item=item)
 
+        log_event(
+            "ANALYSIS_RESULT_SAVED",
+            analysisId=analysis_id,
+            fileName=file_name,
+            tableName=table_name,
+            status="COMPLETED"
+        )
+
         return success_response({
             "analysisId": analysis_id,
             "fileName": file_name,
@@ -75,4 +105,10 @@ def lambda_handler(event, context):
         })
 
     except Exception as exception:
+        log_error(
+            "DOCUMENT_ANALYSIS_FAILED",
+            error=str(exception)
+        )
         return error_response(str(exception), status_code=500)
+    
+    
